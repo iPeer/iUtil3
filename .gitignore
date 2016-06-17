@@ -1,12 +1,6 @@
 # Custom ignores
-lib/*
-build/*
-bin/*
-nbproject/*
-*.cfg
-*.mf
-hs_err_pid*
-*.jar
+*/bin/*
+*/obj/*
 
 # Windows image file caches
 Thumbs.db
