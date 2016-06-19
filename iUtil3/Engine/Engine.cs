@@ -1,7 +1,9 @@
 ﻿using iUtil3.IRC;
 using iUtil3.Logging;
+using iUtil3.Utilities;
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading;
@@ -40,13 +42,19 @@ namespace iUtil3
 
        private void run()
        {
+
+           Utils.createDirectoriesIfNotExists(Utils.getApplicationEXEFolderPath(), new string[] { "config", "logs", "log_archives", "youtube", "youtube/cache", "youtube/config", "twitch", "twitch/cache", "twitch/config" });
+
+           if (Directory.GetFiles(Path.Combine(Utils.getApplicationEXEFolderPath(), "logs")).Length > 0)
+               Logger.ArchiveAndRemoveOldLogs();
+
            // Initialise logging
            this.Logger = new Logger("Engine");
-
+           
            // Startup IRC handler
 
            this.Protocol = new Protocol();
-           this.Protocol.setNick("iUtil3").setServer("irc.swiftirc.net").setChannels("#QuestHelp").setSLL(false).setPort(6667);
+           this.Protocol.setNick("iUtil3").setServer("irc.swiftirc.net").setChannels("#Peer.Dev,#QuestHelp").setSLL(false).setPort(6667);
            this.Protocol.startIfNotRunning();
 
            while (keepRunning);

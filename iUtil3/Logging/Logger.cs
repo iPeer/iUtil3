@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.IO;
+using System.IO.Compression;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -27,7 +28,7 @@ namespace iUtil3.Logging
         public string Name { get; private set; }
         public string LogPath { get; private set; }
 
-        public Logger(String name) : this(name, Path.Combine(Utilities.Utils.getApplicationEXEPath(), "logs", String.Format("{0}.log", name))) { }
+        public Logger(String name) : this(name, Path.Combine(Utilities.Utils.getApplicationEXEFolderPath(), "logs", String.Format("{0}.log", name))) { }
 
         public Logger(String name, String path)
         {
@@ -42,6 +43,23 @@ namespace iUtil3.Logging
             }
             // At this point, everything is save to use, so we can start writing stuff to the log
             this.LogToEngineAndModule("Logger created with name '{0}' -- File path: {1}", name, path);
+
+        }
+
+        public static void ArchiveAndRemoveOldLogs()
+        {
+            string archivePath = Path.Combine(Utils.getApplicationEXEFolderPath(), "log_archives");
+            string archiveName = String.Format("LOGS-{0}.zip", DateTime.Now.ToString("yyyy-MM-dd HH-mm-ss"));
+
+            string fullArchivePath = Path.Combine(archivePath, archiveName);
+
+            ZipFile.CreateFromDirectory(Path.Combine(Utils.getApplicationEXEFolderPath(), "logs"), fullArchivePath, CompressionLevel.Fastest, false, Encoding.UTF8);
+
+            string[] files = Directory.GetFiles(Path.Combine(Utils.getApplicationEXEFolderPath(), "logs"));
+            foreach (string f in files)
+            {
+                File.Delete(f);
+            }
 
         }
 

@@ -10,6 +10,9 @@ using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
+using iUtil3.Utilities;
+using iUtil3.IRC.IAL;
+using iUtil3.IRC.Commands;
 
 namespace iUtil3.IRC
 {
@@ -27,7 +30,8 @@ namespace iUtil3.IRC
         public const string COMMAND_CHARS = "@#.!"; // What characters count as command characters when a message is started with them?
 
         public string Server { get; private set; }
-        public string Nick { get; private set; }
+        [Obsolete]
+        public string Nick { get { return this.IAL.ME; } private set { this.IAL.setBotNick(value); } }
         public string Channels { get; private set; }
         public int Port { get; private set; }
         public bool SSL { get; private set; }
@@ -39,6 +43,8 @@ namespace iUtil3.IRC
         public Dictionary<string, object> NETWORK_SETTINGS;
 
         public Logger Logger { get; private set; }
+        public IAL.IAL IAL { get; private set; }
+        public CommandManager CommandManager { get; private set; }
 
         public bool Connected { get; private set; }
 
@@ -48,6 +54,10 @@ namespace iUtil3.IRC
 
         private Int64 _bytesSent = 0, _bytesRecieved = 0;
         private int currentRetryCount = 0;
+
+        /* Events */
+
+        public EventHandler OnConnectedToIRC;
 
         public Int64 BytesSent
         {
@@ -65,7 +75,7 @@ namespace iUtil3.IRC
             }
         }
 
-        private bool quitWasRequested = false; // Was the disconnect we just experienced requested? (t = yes, f = no)
+        public bool quitWasRequested = false; // Was the disconnect we just experienced requested? (t = yes, f = no)
 
         private TcpClient connection;
         private StreamWriter _out;
@@ -75,12 +85,28 @@ namespace iUtil3.IRC
         {
             Instance = this;
             this.Logger = new Logger("IRC");
+
+            this.Logger.Log("Creating IAL instance");
+            this.IAL = new IAL.IAL();
+            this.IAL.setBotNick(DEFAULT_NICK);
+
+            this.Logger.Log("Creating CommandManager instance");
+            this.CommandManager = new CommandManager();
+
             this.Server = DEFAULT_SERVER;
             this.Port = DEFAULT_PORT;
-            this.Nick = DEFAULT_NICK;
             this.Channels = DEFAULT_CHANNELS;
             this.SSL = DEFAULT_SSL;
             createThread();
+        }
+
+        public void _OnConnectedToIRC()
+        {
+            EventHandler eh = OnConnectedToIRC;
+            if (eh != null)
+            {
+                eh(this, EventArgs.Empty);
+            }
         }
 
         public Protocol setServer(string server)
@@ -101,7 +127,7 @@ namespace iUtil3.IRC
             if (this.Connected) { /* TODO: Server-verified nick changes */ }
             else // Not connected, no need to verify with the server
             {
-                this.Nick = nick;
+                this.IAL.setBotNick(nick);
             }
             return this;
         }
@@ -170,37 +196,12 @@ namespace iUtil3.IRC
 
                 if (this.SSL)
                 {
-                    // TODO?: Verify SSL certificates
-                    RemoteCertificateValidationCallback sslCallback = delegate { return true; };
-                    RemoteCertificateValidationCallback certValidationWithIrcAsSender = delegate(object sender, X509Certificate cert, X509Chain chain, SslPolicyErrors sslPolicyErrors)
-                        {
-                            return sslCallback(this, cert, chain, sslPolicyErrors);
-                        };
-                    LocalCertificateSelectionCallback selectionCallback = delegate(object sender, string targetHost, X509CertificateCollection lCerts, X509Certificate rCert, string[] acceptableIssuers)
-                    {
-                        if (lCerts == null || lCerts.Count == 0)
-                        {
-                            return null;
-                        }
-                        return lCerts[0];
-                    };
 
-                    SslStream sslStream = new SslStream(stream, false, certValidationWithIrcAsSender, selectionCallback);
+                    // TODO?: FIX ME
 
-                    try
-                    {
-                        sslStream.AuthenticateAsClient(this.Server);
-                    }
-                    catch (IOException e)
-                    {
-                        this.Logger.LogToEngineAndModule("Couldn't authenticate with SSL: {0}", LogLevel.ERROR, e.Message);
-                        // Bail
-                        this.IsRunning = false;
-                        this.Thread.Abort();
-                        return;
-                    }
+                    stream = new SslStream(stream, false, (sender, certificate, chain, policyErrors) => true);
+                    ((SslStream)stream).AuthenticateAsClient(this.Server);
 
-                    stream = sslStream;
                 }
 
                 this._in = new StreamReader(stream, new UTF8Encoding());
@@ -221,12 +222,20 @@ namespace iUtil3.IRC
                 reconnect();
             }
 
-            changeNick(this.Nick);
+            changeNick(this.IAL.ME);
 
             String @in = String.Empty;
-            while ((@in = this._in.ReadLine()) != null && this.IsRunning/* && this.Connected*/)
+            try
             {
-                parseIRCLine(@in);
+                while ((@in = this._in.ReadLine()) != null && this.IsRunning/* && this.Connected*/)
+                {
+                    parseIRCLine(@in);
+                }
+            }
+            catch (IOException e)
+            {
+                this.Logger.LogToEngineAndModule("An error occurred while attempting to read from the IRC connection: {0}", LogLevel.ERROR, e.Message);
+                reconnect();
             }
 
         }
@@ -237,7 +246,7 @@ namespace iUtil3.IRC
             string[] line_split = line.Split(' ');
             if (line.StartsWith("PING "))
             {
-                sendLine(line.Replace("PING", "PONG"));
+                sendLine(line.Replace("PING", "PONG"), false);
             }
             else // We don't log pings because they're really spammy
                 this.Logger.Log("[RECV] {0}", LogLevel.INFO, line);
@@ -253,17 +262,16 @@ namespace iUtil3.IRC
                     this.NETWORK_SETTINGS.Clear();
                 }
             }
-            else if (line_split[1] == "004") // Identify and set usermodes here
+            /*else if (line_split[1] == "004")
             {
-                //TODO: Identify
-                sendLine(String.Format("MODE {0} {1}", this.Nick, "+Bp"));
-            }
+ 
+            }*/
             else if (line_split[1] == "005") // Network settings
             {
                 if (this.NETWORK_SETTINGS == null)
                     this.NETWORK_SETTINGS = new Dictionary<string, object>();
 
-                for (int x = 3; x < line_split.Length - 5 /* Don't parse "are supported by this server" */; x++)
+                for (int x = 3; x < line_split.Length - 5 /* Don't parse ":are supported by this server" */; x++)
                 {
                     if (line_split[x].Contains("="))
                     {
@@ -275,27 +283,42 @@ namespace iUtil3.IRC
                         this.NETWORK_SETTINGS.Add(line_split[x], true);
                     }
                 }
+            }
+            else if (line_split[1] == "010") // please use this server instead
+            {
+                // TODO
+            }
+            else if (line_split[1] == "251") // There are __ users and __ invisible on __ servers
+            {
 #if DEBUG
+                this.Logger.Log("Running in DEBUG mode, dumping contents of network settings Dictionary...", LogLevel.DEBUG);
                 foreach (KeyValuePair<string, object> kv in this.NETWORK_SETTINGS)
                 {
                     this.Logger.Log("\t{0} = {1}", LogLevel.DEBUG, kv.Key, kv.Value);
                 }
 #endif
             }
-            else if (line_split[1] == "010") // please use this server instead
+            else if (line_split[1] == "353") // /NAMES
             {
-                // TODO
+                this.IAL.parseNAMESResponse(line);
             }
-            else if (line_split[1] == "251") // End of /MOTD command
+            else if (line_split[1] == "376") // End of /MOTD command
             {
                 this.ReadyToParseMessages = true;
                 this.Logger.Log("Connected to the {0} network on the server {1}", (this.NETWORK_SETTINGS["NETWORK"] ?? "UNKNOWN"), this.CURRENT_SERVER);
+                this.Logger.Log("Identifying with server....");
+                sendLine("NS id {0}", false, Utils.readEncrypted(Path.Combine(Utils.getApplicationEXEFolderPath(), "config", "irc.i3df")));
+                sendLine(String.Format("MODE {0} {1}", this.IAL.ME, "+Bp"));
                 string[] channels = this.Channels.Split(',');
                 this.Logger.Log("Joining {0} channel(s)", channels.Length);
                 foreach (string s in channels)
                 {
                     joinChannel(s);
                 }
+
+                // Fire OnCorrectedToIRC event for listeners so they can start up
+                this._OnConnectedToIRC();
+
             }
             else if (line_split[1] == "433") // Nick already taken
             {
@@ -308,7 +331,7 @@ namespace iUtil3.IRC
             {
                 this.Connected = false;
                 this.Logger.LogToEngineAndModule("Disconnected from server!", LogLevel.WARNING);
-                if (!this.quitWasRequested) reconnect();
+                if (!this.quitWasRequested) { this.IAL.clearIAL(); reconnect(); }
                 else
                 {
                     this.IsRunning = false;
@@ -324,20 +347,23 @@ namespace iUtil3.IRC
                 // <- :Bond!~Bond@Swift-C8F0EEAD.range86-143.btcentralplus.com PRIVMSG #QuestHelp :lol
 
                 string[] userData = line_split[0].Substring(1).Split('!');
+                bool isServer = userData.Length == 1;
+
+                if (isServer) { return; } // Experimental
+
                 string nick = userData[0];
-                string address = (userData.Length == 2 ? userData[1] : nick);
+                string address = (!isServer ? userData[1] : nick);
+                string identd = userData[1].Split('@')[0];
                 string mode = line_split[1];
                 string channel = line_split[2];
                 string message = line_split[3].Substring(1);
 
+                if (!isServer)
+                    this.IAL.updateUserEntries(nick, identd, address);
+
                 for (int x = 4; x < line_split.Length; x++)
                 {
                     message += String.Format(" {0}", line_split[x]);
-                }
-
-                if (nick.EqualsIgnoreCase("ipeer"))
-                {
-                    messageChannel("#QuestHelp", String.Format("Char 1 is CTCP Char?: {0}, CTCP Type (safed): {1}", message.ToCharArray()[0].Equals('\x01'), message.Split(' ')[0].Substring(1).Replace('\x01', '@')));
                 }
 
                 if (message.ToCharArray()[0].Equals('\x01') && mode.Equals("PRIVMSG")) // CTCPs
@@ -366,19 +392,74 @@ namespace iUtil3.IRC
                         replyMethod = noticeUser;
 
                     string command = message.Substring(1).Split(' ')[0];
-
-                    if (command.EqualsIgnoreCase("3quit") && nick.Equals("iPeer"))
+                    string[] commandParams = new string[0];
+                    try
                     {
-                        sendLine("QUIT :Quit command from {0}", nick);
-                        this.quitWasRequested = true;
+                        commandParams = message.Substring(1 + command.Length + 1).Split(' ');
                     }
-                    else if (command.EqualsIgnoreCase("test"))
-                    {
-                        replyMethod((@public ? channel : nick), "Test reply!");
-                    }
+                    catch { }
 
+                    List<ICommand> commandsToFire = this.CommandManager.RegisteredCommands.FindAll(a => a.Aliases.Contains(command));
+                    this.Logger.Log("{0} command(s) have aliases which match specified command name ({1})", commandsToFire.Count, command);
+                    UserLevel userLevel = this.IAL.getUserLevel(nick);
+                    commandsToFire.ForEach(b => {
+                        if (userLevel < b.requiredUserLevel()) { replyMethod((@public ? channel : nick), String.Format("You do not have the required privilages to use this command! Required: {0}, Have: {1}", b.requiredUserLevel(), userLevel)); }
+                        else { b.run(new CommandMessage(command, COMMAND_CHARS[charIndex].ToString(), @public, channel, replyMethod, commandParams, new User(nick, identd, address), userLevel)); }
+                    });
 
                 }
+
+            }
+
+            else if (Array.IndexOf(new string[] { "JOIN", "PART", "KICK", "QUIT" }, line_split[1]) > -1)
+            {
+                string type = line_split[1];
+                string nick = line.Split('!')[0].Substring(1);
+                string channel = line_split[2].ToLower();
+                string identd = line_split[0].Substring(1).Split('!')[1].Split('@')[0];
+                string address = line_split[0].Substring(1).Split('!')[1].Split('@')[1].Split(' ')[0];
+
+                if (channel.StartsWith(":"))
+                    channel = channel.Substring(1);
+
+                if (type.EqualsIgnoreCase("join"))
+                {
+                    if (nick.Equals(this.IAL.ME))
+                    {
+                        this.Logger.Log("Bot joined channel '{0}'", channel);
+                        this.IAL.registerChannel(channel);
+                    }
+                    this.IAL.registerUsersInChannel(channel.ToLower(), new User[] { new User(nick, identd, address) });
+                }
+                else if (type.EqualsIgnoreCase("part") || type.EqualsIgnoreCase("kick"))
+                {
+
+                    if (nick.Equals(this.IAL.ME))
+                    {
+                        this.IAL.unregisterChannel(channel.ToLower());
+                    }
+                    else
+                    {
+                        this.IAL.processPart(channel.ToLower(), nick);
+                    }
+                }
+
+            }
+
+            else if (line_split[1].Equals("NICK")) // Nick changes
+            {
+                string[] nickData = line_split[0].Split(new char[] { '!', '@' });
+                string oldNick = nickData[0];
+                string identD = nickData[1];
+                string address = nickData[2];
+
+                string newNick = line_split[2];
+
+                if (oldNick.Equals(this.IAL.ME))
+                    this.IAL.setBotNick(newNick);
+
+                this.IAL.processNickChange(oldNick, newNick);
+                this.IAL.updateUserEntries(newNick, identD, address);
 
             }
 
@@ -386,6 +467,9 @@ namespace iUtil3.IRC
 
         public void reconnect()
         {
+            this.RegisteredWithServer = false;
+            this.Connected = false;
+            this.IAL.clearIAL();
             if (currentRetryCount++ < RETRY_ATTEMPTS)
             {
                 this.Logger.LogToEngineAndModule("Waiting {0} seconds before attempting to reconnect...", RETRY_DELAY.ToString());
@@ -418,7 +502,7 @@ namespace iUtil3.IRC
             line = String.Format(line, fillers);
 
             this._bytesSent += Encoding.UTF8.GetByteCount(line);
-            this.Logger.Log("[SEND] {0}", LogLevel.INFO, line);
+            if (log) { this.Logger.Log("[SEND] {0}", LogLevel.INFO, line); }
             _out.WriteLine(line);
             _out.Flush();
         }
@@ -449,7 +533,7 @@ namespace iUtil3.IRC
             sendLine("NICK {0}", newNick);
             if (!this.RegisteredWithServer)
             {
-                sendLine("USER {0} ipeer.auron.co.uk {0}: iPeer's Java Utility Bot", newNick);
+                sendLine("USER {0} ipeer.auron.co.uk {0}: iPeer's C# Utility Bot", newNick);
                 this.RegisteredWithServer = true;
             }
         }

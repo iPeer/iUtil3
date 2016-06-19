@@ -32,8 +32,16 @@
     <WarningLevel>4</WarningLevel>
   </PropertyGroup>
   <ItemGroup>
+    <Reference Include="Newtonsoft.Json">
+      <HintPath>..\packages\Newtonsoft.Json.8.0.3\lib\net45\Newtonsoft.Json.dll</HintPath>
+    </Reference>
+    <Reference Include="Npgsql, Version=3.1.4.0, Culture=neutral, PublicKeyToken=5d8b90d52f46fda7, processorArchitecture=MSIL">
+      <SpecificVersion>False</SpecificVersion>
+      <HintPath>..\packages\Npgsql.3.1.4\lib\net45\Npgsql.dll</HintPath>
+    </Reference>
     <Reference Include="System" />
     <Reference Include="System.Core" />
+    <Reference Include="System.IO.Compression.FileSystem" />
     <Reference Include="System.Xml.Linq" />
     <Reference Include="System.Data.DataSetExtensions" />
     <Reference Include="Microsoft.CSharp" />
@@ -43,6 +51,16 @@
   <ItemGroup>
     <Compile Include="Engine\Engine.cs" />
     <Compile Include="Extensions\StringExtensions.cs" />
+    <Compile Include="IRC\Commands\Command.cs" />
+    <Compile Include="IRC\Commands\CommandManager.cs" />
+    <Compile Include="IRC\Commands\CommandMessage.cs" />
+    <Compile Include="IRC\Commands\CommandQuit.cs" />
+    <Compile Include="IRC\Commands\CommandTest.cs" />
+    <Compile Include="IRC\Commands\CommandWhoAmI.cs" />
+    <Compile Include="IRC\Commands\ICommandSender.cs" />
+    <Compile Include="IRC\IAL\Exceptions\NoSuchChannelException.cs" />
+    <Compile Include="IRC\IAL\IAL.cs" />
+    <Compile Include="IRC\IAL\User.cs" />
     <Compile Include="IRC\Protocol.cs" />
     <Compile Include="Logging\Logger.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
@@ -50,6 +68,7 @@
   </ItemGroup>
   <ItemGroup>
     <None Include="App.config" />
+    <None Include="packages.config" />
   </ItemGroup>
   <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
   <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 

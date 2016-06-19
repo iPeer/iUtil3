@@ -1,6 +1,7 @@
 # Custom ignores
 */bin/*
 */obj/*
+/packages/
 
 # Windows image file caches
 Thumbs.db
